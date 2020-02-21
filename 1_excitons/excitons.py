@@ -99,6 +99,26 @@ class HarmonicPotential(Potential):
 	def analytical(self, rho, l = 0, k = 0):
 		poly = genlaguerre(k, l + 0.5)
 		return rho**(l+1)*np.exp(-0.25*rho**2)*poly(0.5*rho**2)
+
+class CoulombPotential(Potential):
+	def __init__(self):
+		pass
+
+	def outerTurningPoint(self, lambda_, l=0, **kwargs):
+		if l == 0:
+			return -2 / lambda_
+		
+		return (np.sqrt(lambda_ * l * (l + 1) + 1) - 1) / lambda_
+	
+	def W(self, rho, l=0, **kwargs):
+		# Special case when l = 0
+		if l == 0:
+			return -2 / rho
+
+		return (l * (l + 1)) / rho**2 - 2 / rho
+	
+	def analytical(self, rho, l=0, k=0):
+		raise NotImplementedError
 		
 
 
@@ -133,7 +153,7 @@ class WaveFunction:
 
 		# Set the initial values
 		self.wave[0:2] = self.rho[0:2] ** (self.l + 1)
-		self.wave[-2:] = np.exp(-self.rho[-2:] * np.sqrt(lambda_))
+		self.wave[-2:] = np.exp(-self.rho[-2:] * np.sqrt(abs(lambda_)))
 
 		index = self._otpIndex(lambda_)
 
@@ -222,12 +242,10 @@ class WaveFunction:
 
 
 class Solver:
-	MAX_ITER = 50
-
-	def __init__(self, grid, potential, error=1E-4, numerov=True):
+	def __init__(self, grid, potential, error=1E-4, numerov=True, l=0):
 		self.grid = grid
 		self.pot = potential
-		self.wf = WaveFunction(self.grid, self.pot)
+		self.wf = WaveFunction(self.grid, self.pot, l)
 		self.error = error
 		self.numerov = numerov
 
@@ -247,23 +265,45 @@ class Solver:
 		self.wf.normalise()
 
 		F = self.wf.F()
-
-		if F == 0 or (right - left) / 2 < self.error:
-			if fullreturn:
-				return [[lambda_], [F]]
-			else:
-				return [lambda_, F]
+		err = (right - left) / 2
 
 		if np.sign(F) == np.sign(Fleft):
 			left = lambda_
 		else:
 			right = lambda_
+
+		if F == 0 or (err < self.error and abs(((left + right) / 2) - lambda_) < self.error):
+			if fullreturn:
+				return [[lambda_], [F]]
+			else:
+				return [lambda_, F]
 		
 		if fullreturn:
 			res = self.bisect(left, right, fullreturn)
 			return [[lambda_, *res[0]], [F, *res[1]]]
 		else:
 			return self.bisect(left, right, fullreturn)
+	
+	def search(self, guess, fullreturn=False, damping=1):
+		self.wf.propagate(guess, self.numerov)
+		self.wf.normalise() # This ensures that A = 1
+		otp = self.wf._otpIndex(guess)
+		f = self.wf.F() * damping
+
+		lambda_ = guess - f / (2*self.grid.step) * self.wf[otp]
+
+		if abs(f) < self.error and abs(guess - lambda_) < self.error:
+			# The previous iteration was accurate enough
+			if fullreturn:
+				return [[guess], [f]]
+			else:
+				return [guess, f]
+
+		res = self.search(lambda_, fullreturn)
+		if fullreturn:
+			return [[guess, *res[0]], [f, *res[1]]]
+		else:
+			return res
 
 
 
@@ -273,13 +313,18 @@ def plot(grid, ana, *args, err_index=0, title=None, legend=()):
 	plt.figure(figsize=(h,h))
 
 	# Plot the wavefunctions
-	plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+	if isinstance(ana, WaveFunction):
+		plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+	else:
+		plt.subplot2grid((2, 1), (0, 0), rowspan=2)
 
 	labels = [legend[i] if i < len(legend) else f"Computed solution ({i+1})" for i in range(len(grid))]
 
 	for i, wf in enumerate(args):
 		plt.plot(grid, wf, label=labels[i])
-	plt.plot(grid, ana, 'k', linewidth = 0.5, label="Analytical solution")
+	
+	if isinstance(ana, WaveFunction):
+		plt.plot(grid, ana, 'k', linewidth = 0.5, label="Analytical solution")
 
 	if title == None:
 		plt.title(f"Wavefunctions for grid n = {len(grid)}")
@@ -291,21 +336,22 @@ def plot(grid, ana, *args, err_index=0, title=None, legend=()):
 	plt.legend()
 	plt.grid()
 
-	# Plot the error
-	plt.subplot2grid((3, 1), (2, 0))
+	# Plot the error (if it is provided)
+	if isinstance(ana, WaveFunction):
+		plt.subplot2grid((3, 1), (2, 0))
 
-	if isinstance(err_index, tuple):
-		for i in err_index:
-			plt.plot(ana.error(args[i]), label=f"Error in {labels[i]}")
-	else:
-		plt.plot(ana.error(args[err_index]), label=f"Error in {labels[err_index]}")
+		if isinstance(err_index, tuple):
+			for i in err_index:
+				plt.plot(ana.error(args[i]), label=f"Error in {labels[i]}")
+		else:
+			plt.plot(ana.error(args[err_index]), label=f"Error in {labels[err_index]}")
 
-	plt.title(f"Error between analytical and computed solutions")
-	plt.xlabel(r"$\rho$")
-	plt.ylabel(r"$\Delta\zeta$")
-	plt.ticklabel_format(style="sci", axis="y", scilimits=(0,0))
-	plt.legend()
-	plt.grid()
+		plt.title(f"Error between analytical and computed solutions")
+		plt.xlabel(r"$\rho$")
+		plt.ylabel(r"$\Delta\zeta$")
+		plt.ticklabel_format(style="sci", axis="y", scilimits=(0,0))
+		plt.legend()
+		plt.grid()
 
 	plt.tight_layout()
 
