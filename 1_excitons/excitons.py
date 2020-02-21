@@ -144,13 +144,19 @@ class WaveFunction:
 		# Ensure continuity
 		self.wave[index:] = crossval / self.wave[index] * self.wave[index:]
 		self.wave[index] = crossval
+
+		return self
 	
 	def normalise(self):
 		self.wave /= (np.linalg.norm(self.wave) * np.sqrt(self.rho.step))
+
+		return self
 	
 	def analytical(self):
 		for i in range(len(self.wave)):
 			self.wave[i] = self.potential.analytical(self.rho[i])
+
+		return self
 	
 	def error(self, wf):
 		return np.abs(self - wf)
@@ -176,11 +182,7 @@ class WaveFunction:
 		fwd *= self.wave[index] / fwd[1]
 		bwd *= self.wave[index] / bwd[1]
 		
-		# Solve for F
-		print(fwd)
-		print(bwd)
-		print("")
-		return (bwd[0] - bwd[-1]) - (fwd[-1] - bwd[0])
+		return (bwd[0] - bwd[-1]) - (fwd[-1] - fwd[0])
 
 	
 	def _otpIndex(self, lambda_):
@@ -246,13 +248,11 @@ class Solver:
 
 		F = self.wf.F()
 
-		print(f"F={F}; Fleft={Fleft}")
-
 		if F == 0 or (right - left) / 2 < self.error:
 			if fullreturn:
-				return ([lambda_], [F])
+				return [[lambda_], [F]]
 			else:
-				return (lambda_, F)
+				return [lambda_, F]
 
 		if np.sign(F) == np.sign(Fleft):
 			left = lambda_
@@ -261,7 +261,7 @@ class Solver:
 		
 		if fullreturn:
 			res = self.bisect(left, right, fullreturn)
-			return ([lambda_, *res[0]], [F, *res[1]])
+			return [[lambda_, *res[0]], [F, *res[1]]]
 		else:
 			return self.bisect(left, right, fullreturn)
 
@@ -294,12 +294,17 @@ def plot(grid, ana, *args, err_index=0, title=None, legend=()):
 	# Plot the error
 	plt.subplot2grid((3, 1), (2, 0))
 
-	plt.plot(ana.error(args[err_index]))
+	if isinstance(err_index, tuple):
+		for i in err_index:
+			plt.plot(ana.error(args[i]), label=f"Error in {labels[i]}")
+	else:
+		plt.plot(ana.error(args[err_index]), label=f"Error in {labels[err_index]}")
 
-	plt.title(f"Error between analytical and computed solution ({err_index+1})")
+	plt.title(f"Error between analytical and computed solutions")
 	plt.xlabel(r"$\rho$")
 	plt.ylabel(r"$\Delta\zeta$")
 	plt.ticklabel_format(style="sci", axis="y", scilimits=(0,0))
+	plt.legend()
 	plt.grid()
 
 	plt.tight_layout()
