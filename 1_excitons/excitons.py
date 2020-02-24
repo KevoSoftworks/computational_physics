@@ -11,18 +11,15 @@ class GridType(Enum):
 	LOG = 1
 
 class Grid:
-	def __init__(self, points, start = 0.0, end = 10.0, type=GridType.LINEAR):
+	def __init__(self, points, start = 0.0, end = 10.0, type=GridType.LINEAR, t1=0):
 		self.start = start
 		self.end = end
 		self.points = points
 		self.type = type
-		
-		if self.type == GridType.LINEAR:
-			self.grid, self.step = np.linspace(self.start, self.end, self.points, \
+		self.t1 = t1
+
+		self.grid, self.step = np.linspace(self.start, self.end, self.points, \
 									endpoint=True, retstep=True)
-		else:
-			self.grid = np.logspace(self.start, self.end, self.points, \
-									endpoint=False)
 
 	def __add__(self, num):
 		return self.grid + num
@@ -119,6 +116,13 @@ class CoulombPotential(Potential):
 	
 	def analytical(self, rho, l=0, k=0):
 		raise NotImplementedError
+
+class CoulombPotentialLog(CoulombPotential):	# As one wise Zoz once said: "Fuck!"
+	def W(self, u, l=0, t1=0, **kwargs):
+		if l == 0:
+			return -2 / (np.exp(u) - t1)
+
+		return (l * (l + 1)) / (np.exp(u) - t1)**2 - 2 / (np.exp(u) - t1)
 		
 
 
@@ -152,14 +156,20 @@ class WaveFunction:
 		self.numerov = numerov
 
 		# Set the initial values
-		self.wave[0:2] = self.rho[0:2] ** (self.l + 1)
-		self.wave[-2:] = np.exp(-self.rho[-2:] * np.sqrt(abs(lambda_)))
+		self.wave[0:2] = \
+			self.rho[0:2] ** (self.l + 1) if self.rho.type == GridType.LINEAR \
+			else np.exp(self.rho[0:2]) ** (self.l + 1)
+		self.wave[-2:] = \
+			np.exp(-self.rho[-2:] * np.sqrt(abs(lambda_))) if self.rho.type == GridType.LINEAR \
+			else np.exp(-np.exp(self.rho[-2:]) * np.sqrt(abs(lambda_)))
 
 		index = self._otpIndex(lambda_)
 
 		self._propagateForward(index, lambda_, numerov)
 		crossval = self.wave[index]
 		self._propagateBackward(index, lambda_, numerov)
+
+		print(self.wave)
 
 		# Ensure continuity
 		self.wave[index:] = crossval / self.wave[index] * self.wave[index:]
@@ -168,7 +178,11 @@ class WaveFunction:
 		return self
 	
 	def normalise(self):
-		self.wave /= (np.linalg.norm(self.wave) * np.sqrt(self.rho.step))
+		factor = \
+			(np.linalg.norm(self.wave) * np.sqrt(self.rho.step)) if self.rho.type == GridType.LINEAR \
+			else (np.linalg.norm(self.wave * np.exp(self.rho)) * np.sqrt(self.rho.step))
+
+		self.wave /= factor
 
 		return self
 	
@@ -207,6 +221,9 @@ class WaveFunction:
 	
 	def _otpIndex(self, lambda_):
 		otp = self.potential.outerTurningPoint(lambda_, l = self.l, k = self.k)
+		if self.rho.type == GridType.LOG:
+			otp = np.log(otp)
+
 		return np.where(self.rho >= otp)[0][0]
 
 	def _propagateForward(self, index, lambda_, numerov):
@@ -228,11 +245,18 @@ class WaveFunction:
 							lambda_, numerov)
 	
 	def _propagateSingle(self, r, w, lambda_, numerov):
-		q = lambda x: 1 - self.rho.step**2 / 12 * (self.potential.W(x) - lambda_)
+		if self.rho.type == GridType.LINEAR:
+			q = lambda x: 1 - self.rho.step**2 / 12 * (self.potential.W(x) - lambda_)
+		else:
+			q = lambda x: 1 - self.rho.step**2 / 12 * ((self.potential.W(x, self.rho.t1) - lambda_\
+				* np.exp(2*x)) + 0.25)
 
 		if numerov:
+			g = (self.potential.W(r[1], l = self.l, k = self.k) - lambda_) if self.rho.type == GridType.LINEAR \
+				else (self.potential.W(r[1], l = self.l, k = self.k) - lambda_)*np.exp(2*r[1]) + 0.25
+
 			return 1/q(r[0]) * ( \
-				self.rho.step**2 * (self.potential.W(r[1], l = self.l, k = self.k) - lambda_) * w[0] \
+				self.rho.step**2 * g * w[0] \
 				+ 2*w[0]*q(r[1]) \
 				- w[1]*q(r[2]))
 		else:
@@ -307,7 +331,7 @@ class Solver:
 
 
 
-def plot(grid, ana, *args, err_index=0, title=None, legend=()):
+def plot(grid, ana, *args, err_index=0, title=None, legend=(), scatter=False):
 	# Setup plot
 	w, h = plt.figaspect(2.0)
 	plt.figure(figsize=(h,h))
@@ -321,7 +345,10 @@ def plot(grid, ana, *args, err_index=0, title=None, legend=()):
 	labels = [legend[i] if i < len(legend) else f"Computed solution ({i+1})" for i in range(len(grid))]
 
 	for i, wf in enumerate(args):
-		plt.plot(grid, wf, label=labels[i])
+		if scatter:
+			plt.scatter(grid, wf, label=labels[i])
+		else:
+			plt.plot(grid, wf, label=labels[i])
 	
 	if isinstance(ana, WaveFunction):
 		plt.plot(grid, ana, 'k', linewidth = 0.5, label="Analytical solution")
