@@ -169,8 +169,6 @@ class WaveFunction:
 		crossval = self.wave[index]
 		self._propagateBackward(index, lambda_, numerov)
 
-		print(self.wave)
-
 		# Ensure continuity
 		self.wave[index:] = crossval / self.wave[index] * self.wave[index:]
 		self.wave[index] = crossval
