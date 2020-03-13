@@ -3,15 +3,24 @@ import copy
 import numpy as np
 
 class Lattice:
-	def __init__(self, L, B, beta = 1):
+	def __init__(self, L, B, beta = 1, J = 0):
 		self.L = L
 		self.B = B
 		self.beta = beta
+		self.J = J
 
 		self.lattice = np.random.randint(2, size=(L, L))
 		self.lattice = self.lattice * 2 - 1
 
 		self.E = -self.B * self.M
+		if J != 0:
+			for coord, spin in np.ndenumerate(self.lattice):
+				sub = self.lattice.take(range(coord[0] - 1, coord[0] + 2), mode='wrap', axis=0) \
+					.take(range(coord[1] - 1, coord[1] + 2), mode='wrap', axis=1)
+				
+				neighbours = sub[1, 0] + sub[0, 1] + sub[2, 1] + sub[1, 2]
+
+				self.E += -0.5*self.J * spin * neighbours
 
 	@property
 	def N(self):
@@ -26,8 +35,16 @@ class Lattice:
 		return np.sum(self.lattice)
 
 	# This function should be called from the "new" lattice S'
-	def delta_e(self, lattice):
-		return self.B * (lattice.M - self.M)
+	def delta_e(self, lattice, coord):
+		neighbours = 0
+		
+		if self.J != 0:
+			sub = self.lattice.take(range(coord[0] - 1, coord[0] + 2), mode='wrap', axis=0) \
+				.take(range(coord[1] - 1, coord[1] + 2), mode='wrap', axis=1)
+			
+			neighbours = sub[1, 0] + sub[0, 1] + sub[2, 1] + sub[1, 2]
+
+		return lattice.lattice[coord[0]][coord[1]] * (2 * self.J * neighbours + 2*self.B)
 
 	def flip(self, x = -1, y = -1):
 		if x == -1 or y == -1:
@@ -37,10 +54,11 @@ class Lattice:
 
 		self.lattice[coord[0]][coord[1]] *= -1
 
-		return self
+		return coord
+
 
 class Probability:
-	ENTROPY_LEN = 1000
+	ENTROPY_LEN = 10000
 	ENTROPY_INDEX = ENTROPY_LEN + 1
 	ENTROPY = None
 
@@ -73,8 +91,9 @@ class Solver:
 	def iterate(self, iterations = -1):
 		i = 0
 		while i < iterations or iterations == -1:
-			tmp = copy.deepcopy(self.lattice).flip()
-			dE = tmp.delta_e(self.lattice)
+			tmp = copy.deepcopy(self.lattice)
+			coord = tmp.flip()
+			dE = tmp.delta_e(self.lattice, coord)
 
 			if Probability.accept(dE, self.lattice.beta):
 				self.lattice = tmp
@@ -86,9 +105,10 @@ class Solver:
 			yield self.lattice
 	
 	# Solve using large steps L**2
-	def fullsolve(self, iterations, ret_val = ("<m>")):
+	def fullsolve(self, iterations, ret_val = ("<m>"), kappa=0):
 		gen = self.iterate()
 		M = []
+		E = []
 		ret = {}
 
 		for _ in range(iterations):
@@ -96,14 +116,19 @@ class Solver:
 				lat = next(gen)
 			
 			M.append(lat.M)
+			E.append(lat.E)
 		
-		M = np.array(M)
+		M = np.array(M[kappa:])
+		E = np.array(E[kappa:])
 		
 		if "<m>" in ret_val:
 			ret["<m>"] = 1/iterations * np.sum(M) / self.lattice.N
 
 		if "M" in ret_val:
 			ret["M"] = M
+
+		if "m" in ret_val:
+			ret["m"] = M / self.lattice.N
 
 		if "<M>" in ret_val:
 			ret["<M>"] = 1/iterations * np.sum(M)
@@ -113,5 +138,14 @@ class Solver:
 			exp_M2 = 1/iterations * np.sum(M**2)
 
 			ret["chi"] = self.lattice.beta * (exp_M2 - exp_M**2)
+		
+		if "<e>" in ret_val:
+			ret["<e>"] = 1/iterations * np.sum(E) / self.lattice.N
+		
+		if "Cb" in ret_val:
+			exp_E = 1/iterations * np.sum(M)
+			exp_E2 = 1/iterations * np.sum(M**2)
+
+			ret["Cb"] = self.lattice.beta**2 * (exp_E2 - exp_E**2)
 
 		return ret
