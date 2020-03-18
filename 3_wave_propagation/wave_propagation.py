@@ -8,6 +8,9 @@ class Matrix:
 		self.lambda_ = lambda_
 	
 	def eta(self, y):
+		if y <= self.potential.start or y >= self.potential.end:
+			return np.sqrt(self.potential[y] - self.lambda_ + 0j)
+
 		return np.sqrt(self.potential[y + self.potential.step / 2.] - self.lambda_ + 0j)
 
 	def transmission(self, dir="right"):
@@ -41,8 +44,8 @@ class TransferMatrix(Matrix):
 		eta_cur = self.eta(self.potential.end)
 				
 		return np.array([ \
-			[np.exp(-self.eta(self.potential.start) * (self.potential.start + self.potential.step)), 0], \
-			[0, np.exp(self.eta(self.potential.start) * (self.potential.start + self.potential.step))] \
+			[np.exp(-self.eta(self.potential.start - self.potential.step) * (self.potential.start)), 0], \
+			[0, np.exp(self.eta(self.potential.start - self.potential.step) * (self.potential.start))] \
 		]) @ product \
 		@ p(eta_prev, eta_cur) @ np.array([ \
 			[np.exp(self.eta(self.potential.end) * self.potential.end), 0], \
@@ -83,9 +86,9 @@ class Potential:
 		self.outside_range = outside_range
 
 	def __getitem__(self, y):
-		if y < self.start:
+		if y <= self.start:
 			return self.outside_range[0](y)
-		elif y > self.end:
+		elif y >= self.end:
 			return self.outside_range[1](y)
 
 		if callable(self.pot):
