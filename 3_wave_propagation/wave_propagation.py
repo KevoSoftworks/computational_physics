@@ -1,4 +1,4 @@
-from functools import cached_property
+from functools import cached_property, reduce
 
 import numpy as np
 
@@ -12,6 +12,9 @@ class Matrix:
 			return np.sqrt(self.potential[y] - self.lambda_ + 0j)
 
 		return np.sqrt(self.potential[y + self.potential.step / 2.] - self.lambda_ + 0j)
+	
+	def flush(self):
+		pass
 
 	def transmission(self, dir="right"):
 		raise NotImplementedError(f"Transmission not implemented for type {type(self)}")
@@ -63,6 +66,53 @@ class TransferMatrix(Matrix):
 	
 	def reflection(self, *args):
 		return np.abs(self.M[1, 0])**2 / np.abs(self.M[0, 0])**2
+
+class ScatterMatrix(Matrix):
+	@cached_property
+	def S(self):
+		class SubMatrix:
+			def __init__(self, arr):
+				self.mat = arr
+
+			def __matmul__(self, other):
+				a = self.mat
+				b = other.mat
+				return SubMatrix(np.array([
+					[a[0,0] + a[0,1]*b[0,0]*(1 - a[1,1]*b[0,0])**(-1)*a[1,0], a[0,1]*(1 - b[0,0]*a[1,1])**(-1)*b[0,1]],
+					[b[1,0]*(1 - a[1,1]*b[0,0])**(-1)*a[1,0], b[1,1] + b[1,0]*(1 - a[1,1]*b[0,0])**(-1)*a[1,1]*b[0,1]]
+				]))
+		
+		def pre(prev, cur, nom=None):
+			if nom is None:
+				return (prev - cur) / (prev + cur)
+			
+			return (2*nom) / (prev + cur)
+		
+		m = []
+
+		for y in self.potential.y[1:]:
+			prev = self.eta(y - self.potential.step)
+			cur = self.eta(y)
+
+			m.append(SubMatrix(np.array([
+				[pre(prev, cur) * np.exp(2*prev*y), pre(prev, cur, cur) * np.exp((prev-cur)*y)],
+				[pre(prev, cur, prev) * np.exp((prev-cur)*y), -pre(prev, cur) * np.exp(-2*cur*y)]
+			])))
+
+		return reduce(lambda a, b: a @ b, m).mat
+	
+	def flush(self):
+		del self.S
+
+	def transmission(self, dir="right"):
+		if dir == "right":
+			return np.abs(self.S[1, 0])**2
+		
+		return np.abs(self.S[0, 1])**2
+	
+	def reflection(self, *args):
+		return np.abs(self.S[0, 0])**2
+
 
 class Potential:
 	def __init__(self, start, end, len, expr = None, outside_range = (lambda x: 0, lambda x: 0)):
