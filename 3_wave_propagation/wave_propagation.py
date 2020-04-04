@@ -6,12 +6,13 @@ class Matrix:
 	def __init__(self, potential, lambda_):
 		self.potential = potential
 		self.lambda_ = lambda_
+		self.midpoint = False
 	
 	def eta(self, y):
-		if y <= self.potential.start or y >= self.potential.end:
+		if y < self.potential.start or y > self.potential.end or not self.midpoint:
 			return np.sqrt(self.potential[y] - self.lambda_ + 0j)
 
-		return np.sqrt(self.potential[y + self.potential.step / 2.] - self.lambda_ + 0j)
+		return np.sqrt(self.potential[y + (self.potential.step / 2.)] - self.lambda_ + 0j)
 	
 	def flush(self):
 		pass
@@ -21,6 +22,13 @@ class Matrix:
 
 	def reflection(self, dir="right"):
 		raise NotImplementedError(f"Transmission not implemented for type {type(self)}")
+
+	def T_wkb(self, D):
+		prefactor = np.abs(self.eta(self.potential.y[-1])/self.eta(self.potential.y[0]))
+		dE = [self.potential[y] - self.lambda_ for y in self.potential.y[2:-2]]
+
+		return prefactor * D(self.lambda_) * \
+			np.exp(-2 * np.sum(self.potential.step * np.sqrt(dE)))
 
 class TransferMatrix(Matrix):
 	@cached_property
@@ -37,7 +45,7 @@ class TransferMatrix(Matrix):
 
 		product = np.array([[1, 0], [0, 1]])
 
-		for y in self.potential.y[1:-1]:
+		for y in self.potential.y[1:-2]:
 			eta_prev = self.eta(y - self.potential.step)
 			eta_cur = self.eta(y)
 
@@ -90,7 +98,7 @@ class ScatterMatrix(Matrix):
 		
 		m = []
 
-		for y in self.potential.y[1:]:
+		for y in self.potential.y[1:-1]:
 			prev = self.eta(y - self.potential.step)
 			cur = self.eta(y)
 
@@ -105,10 +113,12 @@ class ScatterMatrix(Matrix):
 		del self.S
 
 	def transmission(self, dir="right"):
+		prefactor = np.abs(self.eta(self.potential.y[-1])/self.eta(self.potential.y[0]))
+
 		if dir == "right":
-			return np.abs(self.S[1, 0])**2
+			return prefactor * np.abs(self.S[1, 0])**2
 		
-		return np.abs(self.S[0, 1])**2
+		return prefactor * np.abs(self.S[0, 1])**2
 	
 	def reflection(self, *args):
 		return np.abs(self.S[0, 0])**2
@@ -121,7 +131,10 @@ class Potential:
 		self.len = len
 
 		self.pot = np.zeros(self.len)
-		self.y = np.linspace(self.start, self.end, self.len)
+		self.y, self.step = np.linspace(self.start, self.end, self.len, retstep=True)
+
+		self.y = np.insert(self.y, 0, self.start - self.step)
+		self.y = np.append(self.y, self.end + self.step)
 
 		if type(expr) == int or type(expr) == float:
 			self.pot = expr * np.ones(self.len)
@@ -146,10 +159,6 @@ class Potential:
 
 		index = np.where(self.y == y)[0][0]
 		return self.pot[index]
-
-	@property
-	def step(self):
-		return self.y[1] - self.y[0]	#Hacky, but it works
 
 def T_ana(lambda_, a = 1):
 	k = np.sqrt(lambda_)
