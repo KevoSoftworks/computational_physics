@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from uuid import uuid4 as uuid
 from matplotlib.animation import FuncAnimation
 from functools import reduce
 from itertools import product
@@ -7,6 +8,8 @@ from copy import deepcopy
 
 class Particle:
 	def __init__(self, r, v, m=1, k=1):
+		self.id = uuid()
+
 		self.r = r
 		self.v = v
 
@@ -16,17 +19,14 @@ class Particle:
 		self.bounds = None
 
 	def update(self, F, dt, *args):
-		self.v += 0.5*F.calc(self.k, self.r, args[0], args[1], self.bounds)/self.m*dt
+		#0: p(i-1), 1: p(i+1), 2: all p
+		self.v += 0.5*F.calc(self.k, self, args[0], args[1], args[2])/self.m*dt
 		self.r += self.v*dt
 		
 		if self.bounds is not None:
 			self.r = ((self.r - self.bounds[0]) % (self.bounds[1] - self.bounds[0])) + self.bounds[0]
-			if any(self.r > 1) or any(self.r < 0):
-				print("FUCK")
-			if self.r[0] < 0:
-				print("FUUUU")
 
-		self.v += 0.5*F.calc(self.k, self.r, args[0], args[1], self.bounds)/self.m*dt
+		self.v += 0.5*F.calc(self.k, self, args[0], args[1], args[2])/self.m*dt
 	
 	def set_bounds(self, lim):
 		self.bounds = lim
@@ -69,25 +69,13 @@ class ParticleManager:
 		return self
 
 	def generate_grid(self, N, rlim=(0, 1), vlim=(-1, 1), Ndim=3, ret=None):
-		def divisors(n, dim):
-			if dim == 1:
-				return [n]
-			for i in range(int(n/2)+1, 1, -1):
-				if n % i == 0:
-					res = divisors(int(n / i), dim-1)
-					if res is not False:
-						return [i, *res]
-			return False
-
-		p = []
-
-		count = divisors(N, Ndim)
+		count = np.array([int(np.ceil(N ** (1/Ndim))) for _ in range(Ndim)])
 
 		spaces = [np.linspace(*rlim, count[i], endpoint=False) for i in range(Ndim)]
-		rpool = list(product(*spaces))
+		rpool = np.array(list(product(*spaces)))
 		vpool = np.random.rand(N, Ndim) * (vlim[1] - vlim[0]) + vlim[0]
 		for i in range(N):
-			p.append(Particle(np.array(rpool[i]), vpool[i], self.m, self.k).set_bounds(rlim))
+			p.append(Particle(rpool[i], vpool[i], self.m, self.k).set_bounds(rlim))
 
 		self.p = p
 
@@ -113,6 +101,20 @@ class ParticleManager:
 		
 		return self
 
+	def scale(self, T, ret=None):
+		K = np.array([0.5*i.m*i.v**2 for i in self.p])
+		cur_T = np.mean(2/len(K) * K)
+
+		ratio = T / cur_T
+
+		for i in self.p:
+			i.v *= np.sqrt(ratio)
+		
+		if ret is None:
+			return self.p
+		
+		return self
+
 
 class Force:
 	NONE = 0
@@ -125,29 +127,38 @@ class Force:
 		self.type = Force.NONE
 
 	def spring_simple(self):
-		self.expr = lambda k, r, *args: -k*r
+		self.expr = lambda k, r, *args: -k*r.r
 		self.type = Force.SPRING_SIMPLE
 		return self
 
 	def spring_nearest_neighbours(self):
-		self.expr = lambda k, r, r1, r2, *args: -k*(2*r - r1.r - r2.r)
+		self.expr = lambda k, r, r1, r2, *args: -k*(2*r.r - r1.r - r2.r)
 		self.type = Force.SPRING_NN
 		return self
 
 	def lennard_jones(self, rc):
-		#self.expr = lambda k, r, *args: 24/r * (1/r**6 - 2/r**12) if r <= rc else 0
-		def lj(k, _, pi, pj, *args):
-			r = pi.get_closest(pj)
-			r_hat = r / np.linalg.norm(r)
-			dist = np.sqrt(np.sum(r**2))
+		def lj(k, pi, _1, _2, pall):
+			tot = 0
+			for pj in pall:
+				if pi.id == pj.id:
+					continue
 
-			val = 24/dist * (1/(dist**6) - 2/(dist**12)) if dist <= rc else 0
-			val *= r_hat
+				r = pi.get_closest(pj)
+				dist = np.sqrt(np.sum((pi.r - r)**2))
+				dir = (pi.r - r) / np.linalg.norm(pi.r - r)
 
-			if np.isnan(val[:]).any():
-				print("Fuck")
-			print(val)
-			return val
+				if(dist == 0):
+					print(f"{dist}, {r}")
+					print(f"{pi.id}, {pi.r}")
+					print(f"{pj.id}, {pj.r}")
+					raise Exception("FUCK!")
+
+				val = 24/dist * (1/(dist**6) - 2/(dist**12)) if dist <= rc else 0
+				val *= dir
+
+				tot += val
+
+			return tot
 
 		self.expr = lj
 		self.type = Force.LENNARD_JONES
@@ -174,11 +185,18 @@ class Grid:
 	def __len__(self):
 		return len(self.particles)
 
-	def update(self):
-		for i, p in enumerate(self.particles):
-			p.update(self.force, self.dt, self[i-1], self[i+1], self.particles)
+	@property
+	def E(self):
+		#TODO
+		K = [0.5*p.m*p.v**2 for p in self[:]]
+		pass
 
-		self.history.append([j.r for j in self[:]])
+	def update(self):
+		part = deepcopy(self.particles)
+		for i, p in enumerate(self.particles):
+			p.update(self.force, self.dt, self[i-1], self[i+1], part)
+
+		self.history.append([deepcopy(j.r) for j in self.particles])
 		
 		self.ticks += 1
 
@@ -186,13 +204,18 @@ class Grid:
 		fig = plt.figure()
 		ax = fig.add_subplot(111, projection="3d")
 		ax.set_xlim3d(lim)
+		ax.set_xlabel("x")
 		ax.set_ylim3d(lim)
+		ax.set_ylabel("y")
 		ax.set_zlim3d(lim)
-		scatter = ax.scatter([p[0] for p in self.history[0]], [p[1] for p in self.history[0]], [p[2] for p in self.history[0]])
+		ax.set_zlabel("z")
+		scatter, = ax.plot([p[0] for p in self.history[0]], [p[1] for p in self.history[0]], [p[2] for p in self.history[0]], marker="o", linestyle="")
 
-		def anim(frame, grid):
-			scatter._offsets3d([p[0] for p in self.history[frame]], [p[1] for p in self.history[frame]], [p[2] for p in self.history[frame]])
-			return scatter
+		def anim(frame, hist):
+			scatter.set_xdata([p[0] for p in hist[frame]])
+			scatter.set_ydata([p[1] for p in hist[frame]])
+			scatter.set_3d_properties([p[2] for p in hist[frame]])
+			return scatter,
 
-		#handler = FuncAnimation(fig, anim, frames=len(self.history), fargs=self, repeat=False, blit=False, interval=50)
-		#return handler
+		handler = FuncAnimation(fig, anim, frames=len(self.history), fargs=[self.history], repeat=False, blit=False, interval=1000/30)
+		return handler
