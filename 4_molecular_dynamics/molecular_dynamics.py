@@ -24,7 +24,8 @@ class Particle:
 		self.r += self.v*dt
 		
 		if self.bounds is not None:
-			self.r = ((self.r - self.bounds[0]) % (self.bounds[1] - self.bounds[0])) + self.bounds[0]
+			#self.r = ((self.r - self.bounds[0]) % (self.bounds[1] - self.bounds[0])) + self.bounds[0]
+			self.r %= self.bounds[1]
 
 		self.v += 0.5*F.calc(self.k, self, args[0], args[1], args[2])/self.m*dt
 	
@@ -36,8 +37,8 @@ class Particle:
 		if self.bounds is None:
 			return p.r
 
-		ri = deepcopy(self.r) - self.bounds[0]
-		rj = deepcopy(p.r) - self.bounds[0]
+		ri = self.r #deepcopy(self.r) - self.bounds[0]
+		rj = p.r #deepcopy(p.r) - self.bounds[0]
 		L = self.bounds[1] - self.bounds[0]
 
 		ret = []
@@ -69,6 +70,7 @@ class ParticleManager:
 		return self
 
 	def generate_grid(self, N, rlim=(0, 1), vlim=(-1, 1), Ndim=3, ret=None):
+		p = []
 		count = np.array([int(np.ceil(N ** (1/Ndim))) for _ in range(Ndim)])
 
 		spaces = [np.linspace(*rlim, count[i], endpoint=False) for i in range(Ndim)]
@@ -89,7 +91,7 @@ class ParticleManager:
 			p = self.p
 
 		m = np.sum([i.m for i in p])
-		mv = np.sum([i.m*i.v for i in p])
+		mv = np.sum([i.m*i.v for i in p], axis=0)
 
 		for pa in p:
 			pa.v -= mv / m
@@ -138,14 +140,29 @@ class Force:
 
 	def lennard_jones(self, rc):
 		def lj(k, pi, _1, _2, pall):
+			"""r = np.array([pi.get_closest(pj) for pj in pall if pi.id != pj.id])
+			dist = 1/np.sqrt(np.sum((r - pi.r) ** 2, axis=1))
+			dir = (r - pi.r) / np.linalg.norm(r - pi.r)
+
+			dir = dir[dist <= rc]
+			dist = 1/dist[dist <= rc]
+
+			f = np.repeat(24*dist*(dist**6 - 2*dist**12), 3).reshape(np.shape(dir))
+
+			tot1 = np.sum(f*dir, axis=0)
+			return tot1"""
+
 			tot = 0
 			for pj in pall:
 				if pi.id == pj.id:
 					continue
 
 				r = pi.get_closest(pj)
-				dist = np.sqrt(np.sum((pi.r - r)**2))
-				dir = (pi.r - r) / np.linalg.norm(pi.r - r)
+				dist = np.sqrt(np.sum((r - pi.r)**2))
+				dir = (r - pi.r) / np.linalg.norm(r - pi.r)
+
+				#if dist < 0.5:
+				#	print("extreme")
 
 				if(dist == 0):
 					print(f"{dist}, {r}")
@@ -157,6 +174,12 @@ class Force:
 				val *= dir
 
 				tot += val
+
+			#if np.sum(tot) != np.sum(tot1):
+			#	raise Exception(f"{tot} != {tot1}")
+
+			#if np.sum(tot) > 100:
+				#print("Fuck...")
 
 			return tot
 
@@ -188,8 +211,11 @@ class Grid:
 	@property
 	def E(self):
 		#TODO
-		K = [0.5*p.m*p.v**2 for p in self[:]]
-		pass
+		K = np.sum([0.5*p.m*p.v**2 for p in self[:]])
+		V = []
+		for p in self[:]:
+			r = np.array([p.get_closest(pj) for pj in self[:] if p.id != pj.id])
+			dist = 1/np.sqrt(np.sum((r - p.r) ** 2, axis=1))
 
 	def update(self):
 		part = deepcopy(self.particles)
