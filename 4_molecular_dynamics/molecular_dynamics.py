@@ -9,6 +9,7 @@ from copy import deepcopy
 class ParticleManager:
 	def __init__(self, N, rlim=(-1, 1), vlim=(-1, 1), Ndim=1, m=1, k=1, as_grid=False):
 		self.N = N
+		self.Ndim = Ndim
 		self.m = m
 		self.k = k
 
@@ -29,7 +30,7 @@ class ParticleManager:
 		axis, step = np.linspace(*rlim, size, endpoint=False, retstep=True)
 		grid = np.stack(np.meshgrid(axis, axis, axis)).reshape((Ndim, size**Ndim)).T
 
-		self.r = grid[:N] + step / 2
+		self.r = grid[:N] + step / 2 + np.random.uniform(-0.1, 0.1, (N, 3))
 		self.v = np.random.rand(N, Ndim) * (vlim[1] - vlim[0]) + vlim[0]
 
 	def remove_translation(self):
@@ -38,8 +39,8 @@ class ParticleManager:
 		return self
 
 	def scale(self, T):
-		K = 0.5*self.m*self.v**2
-		cur_T = np.mean(2/K.size * K)
+		K = 0.5*np.sum(self.m*self.v**2)
+		cur_T = 2/self.Ndim * K
 
 		ratio = T / cur_T
 
@@ -59,7 +60,15 @@ class ParticleManager:
 		# TODO: tmp solution
 		self.v += 0.5 * self.a * dt
 		self.r += self.v * dt
-		self.r %= self.bounds[1]
+
+		for i in range(self.r.shape[0]):
+			for j in range(self.Ndim):
+				if self.r[i, j] >= self.bounds[1]:
+					self.r[i, j] = self.r[i, j] - self.bounds[1]
+				elif self.r[i, j] < 0:
+					self.r[i, j] = self.r[i, j] + self.bounds[1]
+
+		#self.r %= self.bounds[1]
 		f, pot = force.calc(self)
 		self.a = f / self.m
 		self.v += 0.5 * self.a * dt
@@ -88,6 +97,9 @@ class Force:
 		return self
 
 	def lennard_jones(self, rc):
+		# Particles going through boundaries have energy conservation
+		# Particles within Rc (seem to) have energy conservation
+
 		def compute_component(dist):
 			inv_dist = 1 / dist
 
@@ -119,8 +131,10 @@ class Force:
 
 					if dist <= rc:
 						tmp = compute_component(dist) * (diff / dist)
+						if np.abs(compute_potential(dist)) > 10:
+							print(f"Failure: {dist}, {diff}, {compute_component(dist)}, {compute_potential(dist)}")
 
-						total_pot += compute_potential(dist) - pot_rc
+						total_pot += (compute_potential(dist) - pot_rc)
 
 						total_force[i] += tmp
 						total_force[j] -= tmp
