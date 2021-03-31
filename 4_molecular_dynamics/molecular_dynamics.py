@@ -235,13 +235,13 @@ class Grid:
 		ax.set_ylabel("y")
 		ax.set_zlim3d(lim)
 		ax.set_zlabel("z")
-		scatter, = ax.plot([p[0] for p in self.history[0]], [p[1] for p in self.history[0]], [p[2] for p in self.history[0]], marker="o", linestyle="")
+		scatter, = ax.plot(np.array([p[0] for p in self.history[0]]), np.array([p[1] for p in self.history[0]]), np.array([p[2] for p in self.history[0]]), marker="o", linestyle="")
 
 		def anim(frame, hist):
-			scatter.set_xdata([p[0] for p in hist[frame]])
-			scatter.set_ydata([p[1] for p in hist[frame]])
-			scatter.set_3d_properties([p[2] for p in hist[frame]])
+			scatter.set_xdata(hist[frame][:,0])
+			scatter.set_ydata(hist[frame][:,1])
+			scatter.set_3d_properties(hist[frame][:,2])
 			return scatter,
 
-		handler = FuncAnimation(fig, anim, frames=len(self.history), fargs=[self.history], repeat=False, blit=False, interval=1000/30)
+		handler = FuncAnimation(fig, anim, frames=len(self.history), fargs=[np.array(self.history)], repeat=False, blit=False, interval=1000/30)
 		return handler
