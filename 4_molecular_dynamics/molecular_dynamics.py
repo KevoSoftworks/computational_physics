@@ -7,7 +7,7 @@ from itertools import product
 from copy import deepcopy
 
 class ParticleManager:
-	def __init__(self, N, rlim=(-1, 1), vlim=(-1, 1), Ndim=1, m=1, k=1, as_grid=False):
+	def __init__(self, N, rlim=(-1, 1), vlim=(-1, 1), Ndim=1, m=1, k=1, as_grid=False, rho=None):
 		self.N = N
 		self.Ndim = Ndim
 		self.m = m
@@ -15,8 +15,8 @@ class ParticleManager:
 
 		self.bounds = rlim
 
-		if as_grid:
-			self._generate_grid(N, rlim, vlim, Ndim)
+		if as_grid and rho is not None:
+			self._generate_grid(N, rho, vlim, Ndim)
 		else:
 			self._generate(N, rlim, vlim, Ndim)
 
@@ -25,7 +25,10 @@ class ParticleManager:
 		self.v = np.random.rand(N, Ndim) * (vlim[1] - vlim[0]) + vlim[0]
 		self.a = np.zeros((N, Ndim))
 
-	def _generate_grid(self, N, rlim=(0, 1), vlim=(-1, 1), Ndim=3, ret=None):
+	def _generate_grid(self, N, rho, vlim=(-1, 1), Ndim=3, ret=None):
+		rlim = (0, (N/rho)**(1/3))
+		self.bounds = rlim
+
 		size = int(np.ceil(N ** (1/Ndim)))
 		axis, step = np.linspace(*rlim, size, endpoint=False, retstep=True)
 		grid = np.stack(np.meshgrid(axis, axis, axis)).reshape((Ndim, size**Ndim)).T
@@ -40,7 +43,7 @@ class ParticleManager:
 
 	def scale(self, T):
 		K = 0.5*np.sum(self.m*self.v**2)
-		cur_T = 2/self.Ndim * K
+		cur_T = 2/(3*self.N) * K	# eq. 3.2 of Ercolessi
 
 		ratio = T / cur_T
 
@@ -103,14 +106,12 @@ class Force:
 		def compute_component(dist):
 			inv_dist = 1 / dist
 
-			return 24 * inv_dist * (inv_dist ** 6 - 2*inv_dist**12)
+			return -24 * inv_dist * (inv_dist ** 6 - 2*inv_dist**12)
 
 		def compute_potential(dist):
 			inv_dist = 1 / dist
 
 			return 4 * (inv_dist ** 12 - inv_dist ** 6)
-
-		# TODO: Potential should be shifted at Rc (eq 10)
 
 		def lj(pm):
 			total_force = np.zeros(pm.r.shape)
@@ -124,15 +125,21 @@ class Force:
 					rj = pm.r[j]
 
 					diff = ri - rj
-					diff -= np.sign(diff) * pm.bounds[1] * (np.abs(diff) // (pm.bounds[1] / 2))
+					_gt = diff >= pm.bounds[1] / 2
+					_lt = diff <= -pm.bounds[1] / 2
+
+					diff[_gt] -= pm.bounds[1]
+					diff[_lt] += pm.bounds[1]
+
+					#diff -= np.sign(diff) * pm.bounds[1] * (np.abs(diff) // (pm.bounds[1] / 2))
 					dist = np.linalg.norm(diff)
 
 					#print(f"diff {diff}, dist {dist}, i {i}, j{j}")
 
 					if dist <= rc:
 						tmp = compute_component(dist) * (diff / dist)
-						if np.abs(compute_potential(dist)) > 10:
-							print(f"Failure: {dist}, {diff}, {compute_component(dist)}, {compute_potential(dist)}")
+						#if np.abs(compute_potential(dist)) > 10:
+						#	print(f"Failure: {dist}, {diff}, {compute_component(dist)}, {compute_potential(dist)}")
 
 						total_pot += (compute_potential(dist) - pot_rc)
 
