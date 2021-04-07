@@ -7,12 +7,17 @@ from copy import deepcopy
 
 class ParticleManager:
 	def __init__(self, N, rlim=(-1, 1), vlim=(-1, 1), Ndim=1, m=1, k=1, as_grid=False, rho=None):
+		self._pressure_component = None
+		self._bins = None
+		self._hist_rdy = False
+
 		self.N = N
 		self.Ndim = Ndim
 		self.m = m
 		self.k = k
 
 		self.bounds = rlim
+		self.rho = rho
 
 		if as_grid and rho is not None:
 			self._generate_grid(N, rho, vlim, Ndim)
@@ -35,16 +40,19 @@ class ParticleManager:
 		self.r = grid[:N] + step / 2 + np.random.uniform(-0.1, 0.1, (N, 3))
 		self.v = np.random.rand(N, Ndim) * (vlim[1] - vlim[0]) + vlim[0]
 
+	def init_hist(self, bins):
+		self._bins = bins
+		self._hist = np.zeros(bins, dtype=np.int32)
+
+		return self
+
 	def remove_translation(self):
 		self.v -= np.sum(self.m * self.v, axis=0) / (self.N * self.m)
 
 		return self
 
 	def scale(self, T):
-		K = 0.5*np.sum(self.m*self.v**2)
-		cur_T = 2/(3*self.N) * K	# eq. 3.2 of Ercolessi
-
-		ratio = T / cur_T
+		ratio = T / self.T
 
 		self.v *= np.sqrt(ratio)
 
@@ -52,7 +60,7 @@ class ParticleManager:
 
 	def set_initial_a(self, force):
 		if force.type == Force.LENNARD_JONES:
-			f, pot = force.calc(self)
+			f, _ = force.calc(self)
 		else:
 			f = force.calc(self)
 		self.a = f / self.m
@@ -75,6 +83,31 @@ class ParticleManager:
 		self.v += 0.5 * self.a * dt
 
 		return pot
+
+	@property
+	def K(self):
+		return 0.5 * np.sum(self.m * self.v**2)
+
+	@property
+	def T(self):
+		return 2/(3*self.N) * self.K	# eq. 3.2 of Ercolessi
+
+	@property
+	def V(self):
+		if self.Ndim < 3:
+			raise Exception(f"Volume cannot be determined for {self.Ndim} dimensions, need at least 3.")
+
+		return (self.bounds[1] - self.bounds[0]) ** self.Ndim
+
+	@property
+	def P(self):
+		if self.rho is None:
+			raise Exception("No density defined, cannot compute pressure")
+
+		if self._pressure_component is None:
+			raise Exception("No pressure component set by the Force class. Please run the force computation.")
+
+		return self.rho * self.k * self.T + self._pressure_component / (3 * self.V)
 
 
 class Force:
@@ -115,6 +148,7 @@ class Force:
 			# does, I am not changing it, in fear of breaking it again. 
 			total_force = np.zeros(pm.r.shape)
 			total_pot = 0
+			total_pressure = 0
 
 			pot_rc = compute_potential(rc)
 
@@ -127,13 +161,21 @@ class Force:
 					diff -= np.sign(diff) * pm.bounds[1] * (np.abs(diff) // (pm.bounds[1] / 2))
 					dist = np.linalg.norm(diff)
 
+					if pm._bins is not None and pm._hist_rdy:
+						hist, _ = np.histogram(dist, bins=pm._bins, range=(0, pm.bounds[1] / 2))
+						pm._hist += hist
+
 					if dist <= rc:
 						tmp = compute_component(dist) * (diff / dist)
+
+						total_pressure += tmp @ diff
 						total_pot += (compute_potential(dist) - pot_rc)
 
 						total_force[i] += tmp
 						total_force[j] -= tmp
 
+			# Hacky solution, but otherwise I need to change much more code
+			pm._pressure_component = total_pressure
 			return total_force, total_pot
 
 		self.expr = lj
