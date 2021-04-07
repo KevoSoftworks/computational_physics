@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from uuid import uuid4 as uuid
 from matplotlib.animation import FuncAnimation
 from functools import reduce
 from itertools import product
@@ -52,27 +51,26 @@ class ParticleManager:
 		return self
 
 	def set_initial_a(self, force):
-		# TODO: TMP solution
-
-		f, pot = force.calc(self)
+		if force.type == Force.LENNARD_JONES:
+			f, pot = force.calc(self)
+		else:
+			f = force.calc(self)
 		self.a = f / self.m
 
 		return self
 
 	def verlet(self, force, dt):
-		# TODO: tmp solution
+		pot = None
+
 		self.v += 0.5 * self.a * dt
 		self.r += self.v * dt
 
-		for i in range(self.r.shape[0]):
-			for j in range(self.Ndim):
-				if self.r[i, j] >= self.bounds[1]:
-					self.r[i, j] = self.r[i, j] - self.bounds[1]
-				elif self.r[i, j] < 0:
-					self.r[i, j] = self.r[i, j] + self.bounds[1]
+		if force.type == Force.LENNARD_JONES:
+			self.r %= self.bounds[1]
+			f, pot = force.calc(self)
+		else:
+			f = force.calc(self)
 
-		#self.r %= self.bounds[1]
-		f, pot = force.calc(self)
 		self.a = f / self.m
 		self.v += 0.5 * self.a * dt
 
@@ -100,9 +98,6 @@ class Force:
 		return self
 
 	def lennard_jones(self, rc):
-		# Particles going through boundaries have energy conservation
-		# Particles within Rc (seem to) have energy conservation
-
 		def compute_component(dist):
 			inv_dist = 1 / dist
 
@@ -114,6 +109,10 @@ class Force:
 			return 4 * (inv_dist ** 12 - inv_dist ** 6)
 
 		def lj(pm):
+			# This code is the most unoptimised piece of crap that I have ever written.
+			# However, it works, which is most important in the goal of solving the problems.
+			# Because I have already spent a year trying to get this working, now that it
+			# does, I am not changing it, in fear of breaking it again. 
 			total_force = np.zeros(pm.r.shape)
 			total_pot = 0
 
@@ -125,22 +124,11 @@ class Force:
 					rj = pm.r[j]
 
 					diff = ri - rj
-					_gt = diff >= pm.bounds[1] / 2
-					_lt = diff <= -pm.bounds[1] / 2
-
-					diff[_gt] -= pm.bounds[1]
-					diff[_lt] += pm.bounds[1]
-
-					#diff -= np.sign(diff) * pm.bounds[1] * (np.abs(diff) // (pm.bounds[1] / 2))
+					diff -= np.sign(diff) * pm.bounds[1] * (np.abs(diff) // (pm.bounds[1] / 2))
 					dist = np.linalg.norm(diff)
-
-					#print(f"diff {diff}, dist {dist}, i {i}, j{j}")
 
 					if dist <= rc:
 						tmp = compute_component(dist) * (diff / dist)
-						#if np.abs(compute_potential(dist)) > 10:
-						#	print(f"Failure: {dist}, {diff}, {compute_component(dist)}, {compute_potential(dist)}")
-
 						total_pot += (compute_potential(dist) - pot_rc)
 
 						total_force[i] += tmp
